@@ -677,6 +677,15 @@ def test_render():
 # ---------------------------------------------------------------------------
 # 12. 鲁棒性
 # ---------------------------------------------------------------------------
+def test_used_fallback():
+    rep = {"time": {"used": "2004-06-12 10:00:00", "used_kind": "tst",
+                    "utc_offset_hours": 8}}
+    dt, src = A._resolve_moment(rep)
+    check("S8 used 兜底按当地时换算 UTC", (dt.hour, dt.minute) == (2, 0),
+          (dt.isoformat(), src))
+    check("S9 used 兜底来源标注", "used-as-local" in src, src)
+
+
 def test_robustness():
     section("鲁棒性与时间解析")
     empty = A.chart_natal({})
@@ -776,6 +785,39 @@ def test_cli():
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+def test_semi_diurnal_arc():
+    """半日弧退化值：恒显（极昼）=180°，恒隐（极夜）=0°，赤道春分=90°。"""
+    check("S1 恒显（dec=80, lat=70）半弧=180",
+          A._semi_diurnal_arc(80.0, 70.0) == 180.0,
+          A._semi_diurnal_arc(80.0, 70.0))
+    check("S2 恒隐（dec=-80, lat=70）半弧=0",
+          A._semi_diurnal_arc(-80.0, 70.0) == 0.0,
+          A._semi_diurnal_arc(-80.0, 70.0))
+    check("S3 赤道 dec=0 半弧=90",
+          abs(A._semi_diurnal_arc(0.0, 0.0) - 90.0) < 1e-9)
+    mid = A._semi_diurnal_arc(20.0, 40.0)
+    check("S4 常规纬度半弧在 (0,180)", 0.0 < mid < 180.0, mid)
+
+
+def test_place_warnings():
+    """非法/越界经纬度必须写进 warnings，不能静默纠正；宫头退化时返回 None。"""
+    base = {"time": {"utc": "2004-06-12T02:00:00"},
+            "input": {"longitude": "not-a-number", "latitude": 95.0}}
+    c = A.chart_natal(base)
+    w = " ".join(c.get("warnings") or [])
+    check("S5 非数值经度给出警告", "不是数值" in w, w)
+    check("S6 纬度超 ±89.9 截断警告", "截断" in w, w)
+    check("S7 宫头退化时 house_of_longitude 返回 None",
+          A.house_of_longitude(0.0, [0.0] * 12) is None,
+          A.house_of_longitude(0.0, [0.0] * 12))
+    mid, msrc = A._resolve_moment({"time": {"civil": "2004-06-12 00:00:00",
+                                             "utc_offset_hours": 8}})
+    check("S10 本地 00:00 不被当成缺省 12:00",
+          (mid.day, mid.hour, mid.minute) == (11, 16, 0), (mid.isoformat(), msrc))
+    _, asrc = A._resolve_moment({"time": {"civil": "2004-06-12 10:00:00"}})
+    check("S11 缺时区信息时来源标注假定偏移", "offset 0 assumed" in asrc, asrc)
+
+
 def main():
     if not os.path.exists(FIXTURES):
         print("缺少 %s：请先用 ephem 生成参考夹具" % FIXTURES)
@@ -793,11 +835,14 @@ def main():
     test_speed_retrograde()
     test_aspects()
     test_houses()
+    test_semi_diurnal_arc()
+    test_place_warnings()
     test_angles()
     test_vedic()
     test_balance_phase()
     test_render()
     test_robustness()
+    test_used_fallback()
     test_cli()
 
     print("西洋/印度占星层回归：%d 项" % total)

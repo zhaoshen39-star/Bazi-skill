@@ -2,12 +2,12 @@
 
 # 八字命理分析与跨体系推测引擎 · bazi-skill
 
-**纯标准库 · 零依赖 · 17 套 5253 项回归测试 · 可作为 DSH skill 或 CLI 使用**
+**纯标准库 · 零依赖 · 18 套 5461 项回归测试 · 可作为 DSH skill 或 CLI 使用**
 
 [![tests](https://github.com/zhaoshen39-star/Bazi-skill/actions/workflows/tests.yml/badge.svg)](https://github.com/zhaoshen39-star/Bazi-skill/actions/workflows/tests.yml)
 [![python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![dependencies](https://img.shields.io/badge/dependencies-zero-success)](#)
-[![tests](https://img.shields.io/badge/tests-5253%20passing-brightgreen)](#测试)
+[![tests](https://img.shields.io/badge/tests-5461%20passing-brightgreen)](#测试)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -51,7 +51,7 @@
 | **透明度** | 黑箱打分 + 话术 | 旺衰权重、取格优先级、调候 120 格、成败阈值**全部写进 `references/`**，可复现、可改、可审计 |
 | **覆盖范围** | 单一体系（只排八字，或只排紫微） | 八字 + 紫微 + 奇门 + 六爻 + 小六壬 + 梅花 + 称骨 + 西洋/印度占星 + 数字学 + **跨体系融合**，一条命令 |
 | **输出方式** | 术语堆砌，或纯鸡汤 | 同一份报告两种读法：`--brief` 人话（≤400 字）/ 技术版；`--topic` 只看某几域 |
-| **可验证性** | 无法核对 | 星历对 ephem（太阳 0.005°、月亮 0.002°）、紫微对 iztro（378 盘 2.8 万字段 0 不一致）、**5253 项回归测试** |
+| **可验证性** | 无法核对 | 星历对 ephem（太阳 0.005°、月亮 0.002°）、紫微对 iztro（378 盘 2.8 万字段 0 不一致）、**5461 项回归测试** |
 | **古典校准** | 无 | 64 例《子平真诠》原文命例逐例复算，一致率 64.9% → **89.2%**，反哺修正 7 处引擎逻辑，差异逐条归档 |
 | **边界诚实** | 暗示"很准" | 明确分层：排盘/星历可验证，旺衰/格局/喜用**不可验证**；不给假命中率 |
 | **多体系用法** | 结果互相矛盾时靠人脑硬凑 | 融合层输出**共识/分歧/张力**标签（分歧处往往比一致处有信息量），且声明"不互相验证" |
@@ -84,7 +84,11 @@ python scripts/bazi.py --date 1990-06-15 --time 08:00 --sex male --topic love,ca
 python scripts/bazi.py --date 1990-06-15 --time 08:00 --sex male \
   --divination --ziwei --qimen --fusion --astro --numerology --focus-year 2026
 
-# 5) JSON（给程序用）
+# 5) 风水适配（命卦/八宅/九运飞星，可带坐向与床位/书桌朝向）
+python scripts/bazi.py --date 1990-06-15 --time 08:00 --sex male \
+  --fengshui --sit 子山午向 --bed-head 250 --desk-head 90
+
+# 6) JSON（给程序用）
 python scripts/bazi.py --date 1990-06-15 --time 08:00 --sex male --json
 ```
 
@@ -149,6 +153,7 @@ Windows 控制台（GBK）下脚本会自动把标准输出切到 UTF-8，不会
 | 西洋/印度占星 | 截断 VSOP87 + Meeus 太阳 + ELP 月亮、Placidus 宫位、相位 orb、Lahiri 近似 + 27 宿 | `scripts/astrology.py` |
 | 数字学 | 生命灵数、生日数、成熟数、个人年、Lo Shu 网格（可选姓名笔画） | `scripts/numerology.py` |
 | 跨体系融合 | 六体系九域投票、共识/分歧标签、张力分析、时机合成 | `scripts/fusion.py` |
+| 风水适配 | 命卦/东西四命、八宅大游年、二十四山坐向解析、玄空九运飞星（局型/顺逆）、用神方位楼层、床位/书桌朝向与布局清单 | `scripts/fengshui.py` |
 
 ## 架构
 
@@ -187,26 +192,27 @@ scripts/qimen.py         奇门遁甲（时家转盘拆补法）
 scripts/astrology.py     西洋 / 印度占星
 scripts/numerology.py    数字学
 scripts/fusion.py        跨体系融合层
+scripts/fengshui.py      风水适配（命卦/八宅/玄空九运/床位朝向）
 scripts/tiaohou_table.py 《穷通宝鉴》120 格调候表
 scripts/chenggu_table.py 袁天罡称骨表
 scripts/vendor/          内置 lunar_python（MIT，见 NOTICE.md）
 references/              规则、方法学、数据源、输出契约（13 份）
-tests/                   17 套回归测试 + fixture
+tests/                   18 套回归测试 + fixture
 ```
 
 ## 测试
 
 ```bash
-python tests/run_all.py     # 17 套、5253 项
+python tests/run_all.py     # 18 套、5461 项
 ```
 
 | 套件 | 项数 | 内容 |
 |---|---:|---|
 | verify | 42 | v1 基础回归 |
 | verify_v2 | 49 | v2 兼容契约 |
-| verify_v3 | 94 | v3 分析层 |
-| verify_plain | 52 | 通俗版 |
-| verify_topics | 302 | 专题八域 |
+| verify_v3 | 103 | v3 分析层 |
+| verify_plain | 61 | 通俗版 |
+| verify_topics | 288 | 专题八域 |
 | verify_relations | 13 | 干支关系 |
 | verify_regressions | 22 | 历史回归 |
 | verify_optimizations | 12 | 优化项 |
@@ -215,9 +221,10 @@ python tests/run_all.py     # 17 套、5253 项
 | verify_divination | 168 | 多术数层 |
 | verify_ziwei | 502 | 紫微（含 iztro 对照） |
 | verify_qimen | 2543 | 奇门排盘 |
-| verify_astrology | 468 | 占星对 ephem 星历 |
+| verify_astrology | 479 | 占星对 ephem 星历 |
 | verify_numerology | 203 | 数字学 |
-| verify_fusion | 337 | 跨体系融合 |
+| verify_fusion | 349 | 跨体系融合 |
+| verify_fengshui | 181 | 风水适配（八宅/玄空/朝向） |
 | verify_cases | 194 | 古典命例对照（测量口径，非门禁） |
 
 ## 已知边界

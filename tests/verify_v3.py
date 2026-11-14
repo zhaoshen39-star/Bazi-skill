@@ -373,12 +373,75 @@ def test_stability():
           {k: labels.count(k) for k in set(labels)})
 
 
+def test_dayun_palace():
+    """大运引动事件的宫位归属：只标本柱事件，不得把上一柱事件带进来。"""
+    d = cli_json("--date", "2004-06-12", "--time", "10:00", "--sex", "male",
+                 "--longitude", "123.96", "--true-solar-time", "--focus-year", "2026")
+    dayun = (d.get("chart", {}).get("dayun") or {}).get("list") or []
+    check("Y1 大运存在", bool(dayun))
+    bad = []
+    total_events = 0
+    for dy in dayun:
+        for e in (dy.get("timing") or {}).get("events") or []:
+            total_events += 1
+            if "palace" not in e or not e.get("palace"):
+                bad.append((dy.get("ganzhi"), e.get("type")))
+    check("Y2 每个大运事件都带宫位（%d 个）" % total_events, not bad, bad[:4])
+    check("Y3 宫位取值合法",
+          all(e.get("palace") in ("祖辈/早年/外部环境", "父母/事业/社会",
+                                  "自身/婚姻/健康", "子女/晚年/下属")
+              for dy in dayun for e in (dy.get("timing") or {}).get("events") or []))
+
+
+def test_rescue_structured():
+    """救应条目应带结构化 gods（yong_shen 不再靠拆字符串取十神）。"""
+    found = 0
+    for y, m, d in ((1995, 1, 20), (1984, 2, 20), (2024, 2, 4), (1990, 6, 15), (2004, 6, 12)):
+        c = chart.build(y, m, d, 12, 0, sex=1)
+        st = a3.strength(c["pillars"], c["day_gan"])
+        ge = a3.pattern(c["pillars"], c["day_gan"], st)
+        for r in ge.get("rescue") or []:
+            found += 1
+            check("P1 救应条目带结构化 gods",
+                  isinstance(r.get("gods"), list) and bool(r["gods"])
+                  and all(isinstance(g, str) for g in r["gods"]), r.get("gods"))
+    check("P0 样本中至少出现一条救应", found > 0, found)
+
+
+def test_pair_events_guard():
+    ys_min = {"shen_roles": {}}
+    check("X1 _pair_events 容忍 None 输入",
+          a3._pair_events("甲", "子", None, ys_min, "年柱", "流年") == [],
+          a3._pair_events("甲", "子", None, ys_min, "年柱", "流年"))
+    check("X2 _pair_events 容忍超短输入",
+          a3._pair_events("甲", "子", "甲", ys_min, "年柱", "流年") == [],
+          a3._pair_events("甲", "子", "甲", ys_min, "年柱", "流年"))
+    evs = a3._pair_events("甲", "子", ("己", "丑"), ys_min, "年柱", "流年")
+    he = [e for e in evs if e.get("type") == "天干五合"]
+    check("X3 天干五合按合化五行说明",
+          bool(he) and "化土" in he[0].get("detail", ""),
+          he[0].get("detail") if he else evs)
+    overlap = []
+    for y, m, d in ((1995, 1, 20), (1984, 2, 20), (2024, 2, 4), (1990, 6, 15), (2004, 6, 12)):
+        c = chart.build(y, m, d, 12, 0, sex=1)
+        st = a3.strength(c["pillars"], c["day_gan"])
+        ge = a3.pattern(c["pillars"], c["day_gan"], st)
+        ys = a3.yong_shen(c["day_gan"], None, st, ge, c["pillars"])
+        both = set(ys.get("useful_elements") or []) & set(ys.get("avoid_elements") or [])
+        if both:
+            overlap.append((y, sorted(both)))
+    check("X4 用神与忌神不重叠", not overlap, overlap)
+
+
 def main():
     test_strength()
     test_pattern()
     test_yong_shen()
     test_flow()
+    test_dayun_palace()
+    test_rescue_structured()
     test_cli()
+    test_pair_events_guard()
     test_stability()
     print("v3 分析/推测层回归：%d 项" % total)
     if failures:

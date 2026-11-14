@@ -32,6 +32,10 @@ import topics as topicsmod  # noqa: E402
 import divination as divmod  # noqa: E402
 import ziwei as ziweimod  # noqa: E402
 import fusion as fusionmod  # noqa: E402
+try:
+    import fengshui as fsmod  # noqa: E402
+except Exception:  # pragma: no cover
+    fsmod = None
 try:  # 可选模块：文件缺失时八字主体仍可运行
     import astrology as astromod  # noqa: E402
 except Exception:  # pragma: no cover
@@ -736,6 +740,14 @@ def main(argv=None):
                         help="姓名笔画，逗号分隔，如 \"7,6\"（配合 --name 做五格分析）")
     parser.add_argument("--surname-len", type=int, default=1,
                         help="姓氏字数（复姓用 2），默认 1")
+    parser.add_argument("--fengshui", action="store_true",
+                        help="输出风水适配层（命卦/八宅游年/用神→方位颜色楼层房间；给 --sit 时排八宅+玄空飞星宅盘），与 --json 同用写入 fengshui 字段")
+    parser.add_argument("--sit", default=None,
+                        help="房子坐向：二十四山「子山午向」/单山「子」/度数（北为 0°、顺时针，如 172.5）；隐含 --fengshui")
+    parser.add_argument("--bed-head", default=None, dest="bed_head",
+                        help="床位头朝的方向：二十四山名（如 庚）或度数（如 250）；隐含 --fengshui")
+    parser.add_argument("--desk-head", default=None, dest="desk_head",
+                        help="书桌面向的方向（同上格式）；隐含 --fengshui")
     args = parser.parse_args(argv)
 
     # 先解析时间
@@ -848,6 +860,14 @@ def main(argv=None):
     if want_fusion:
         report["fusion"] = fusionmod.build_fusion(report)
 
+    want_fengshui = bool(getattr(args, "fengshui", False) or getattr(args, "sit", None)
+                         or getattr(args, "bed_head", None) or getattr(args, "desk_head", None))
+    if want_fengshui and fsmod is not None:
+        report["fengshui"] = fsmod.build_fengshui(
+            report, sit=getattr(args, "sit", None),
+            bed_head=getattr(args, "bed_head", None),
+            desk_head=getattr(args, "desk_head", None))
+
     if args.json:
         sys.stdout.reconfigure(encoding="utf-8")
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -895,6 +915,12 @@ def main(argv=None):
         if num_data and nummod is not None:
             sys.stdout.reconfigure(encoding="utf-8")
             print(nummod.render_numerology_text(num_data))
+    if want_fengshui and not args.json:
+        if fsmod is not None and report.get("fengshui"):
+            sys.stdout.reconfigure(encoding="utf-8")
+            print(fsmod.render_fengshui_text(report["fengshui"]))
+        elif fsmod is None:
+            print("【风水适配层】模块未安装（scripts/fengshui.py）")
 
 
 if __name__ == "__main__":

@@ -200,12 +200,75 @@ def test_cli():
         "--focus-year", "2026", "--brief"))
 
 
+def test_event_translation():
+    """事件翻译表必须覆盖 analysis_v3 实际产生的全部类型（否则「另外，…」静默丢句）。"""
+    real = ["伏吟", "反吟（天克地冲）", "地支六冲", "地支六合", "地支半合火局",
+            "地支半合水局", "地支相刑", "地支自刑", "天干五合", "天干相冲", "岁运并临"]
+    missing = [t for t in real if not plainmod._event_plain(t)]
+    check("P51 事件类型表覆盖实际类型", not missing, "未翻译：%r" % missing)
+
+    types = []
+    for block in ("liunian",):
+        for ly in CHART_BOY.get("chart", {}).get(block, []) or []:
+            for e in (ly.get("timing") or {}).get("events") or []:
+                types.append(e.get("type"))
+    for dy in (CHART_BOY.get("chart", {}).get("dayun", {}) or {}).get("list", []) or []:
+        for e in (dy.get("timing") or {}).get("events") or []:
+            types.append(e.get("type"))
+    bad = sorted({t for t in types if not plainmod._event_plain(t)})
+    check("P52 实际盘面事件 100%% 可翻译（%d 个）" % len(types), not bad, "漏翻：%r" % bad)
+
+
+def test_fix_guards():
+    """本轮清理锁定的行为：性别归一、focus_year 兜底、缺段报错、一句话长度。"""
+    rep = json.loads(json.dumps(CHART_BOY))
+    rep["input"]["sex"] = 1
+    band = plainmod.build_plain(rep)["relationship"][0]
+    check("P53 sex=1 归一为男口径", ("现实条件" in band) or ("不主动争" in band), band)
+
+    rep = json.loads(json.dumps(CHART_BOY))
+    rep["input"]["sex"] = 0
+    band = plainmod.build_plain(rep)["relationship"][0]
+    check("P54 sex=0 归一为女口径", "照顾对方的感受" in band, band)
+
+    rep = json.loads(json.dumps(CHART_BOY))
+    rep["input"]["sex"] = ""
+    band = plainmod.build_plain(rep)["relationship"][0]
+    check("P55 性别未知不硬套", "先看清对方" in band, band)
+
+    rep = json.loads(json.dumps(CHART_BOY))
+    rep.pop("focus_year", None)
+    P = plainmod.build_plain(rep)
+    check("P56 缺 focus_year 时大运段仍有内容", bool(P.get("current_decade")), P.get("current_decade"))
+    check("P57 一句话 ≤80 字且以句号收尾",
+          len(P["one_line"]) <= 80 and P["one_line"].endswith("。"), P["one_line"])
+
+    rep = json.loads(json.dumps(CHART_BOY))
+    rep["analysis"].pop("strength", None)
+    try:
+        plainmod.build_plain(rep)
+        ok, msg = False, "没有抛错"
+    except SystemExit as e:
+        ok, msg = ("strength" in str(e)), str(e)
+    check("P58 缺 analysis.strength 给可读错误", ok, msg)
+
+    rep = json.loads(json.dumps(CHART_BOY))
+    lst = rep["chart"]["dayun"]["list"]
+    if lst:
+        lst[0].pop("start_year", None)
+        lst[0].pop("end_year", None)
+    P = plainmod.build_plain(rep)
+    check("P59 大运缺起止年不崩溃", isinstance(P.get("current_decade"), str), P.get("current_decade"))
+
+
 def main():
     test_structure()
     test_forecast()
     test_plain_language()
     test_determinism()
     test_special_and_edge()
+    test_event_translation()
+    test_fix_guards()
     test_cli()
     print("通俗版解读回归：%d 项" % total)
     if failures:

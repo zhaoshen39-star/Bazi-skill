@@ -262,7 +262,31 @@ def main():
         check("N1 无第三方依赖 %s" % bad, bad not in src)
     check("N2 只用 datetime/json 级内置", "import datetime" in src or "from datetime" in src)
 
+    # ── O. 出生年解析（裸年份 / 日期 / 日期时间）──────────────
+    for raw, want in (("1990", 1990), ("1990-05-01", 1990),
+                      ("2004-06-12 10:00", 2004), ("2004", 2004)):
+        got = fusion._birth_year({"input": {"date": raw}})
+        check("O 出生年解析 %r" % raw, got == want, "got=%r" % (got,))
+    check("O 无字段返回 None", fusion._birth_year({}) is None)
+    check("O chart.input.year 优先",
+          fusion._birth_year({"chart": {"input": {"year": 1992}}}) == 1992)
+
     # ── 汇总 ─────────────────────────────────────────────────
+    # ── P. 二轮清理锁定 ─────────────────────────────────────
+    _votes = []
+    fusion._folk_votes({"divination": {"systems": {"meihua": {
+        "ti_yong": {"relation": "吉", "text": "体用比和"}}}}}, _votes)
+    check("P1 梅花按体用关系文本投票",
+          any(v["domain"] == "career" and v["signal"] > 0 for v in _votes), _votes)
+    _z = fusion._consensus({"bazi": 0.6, "ziwei": -0.6}, 0.0)
+    check("P2 加权信号为 0 判信号相抵", _z[2] == "信号相抵", _z)
+    _ov = fusion._overall([{"title": "性格", "consensus": "一致",
+                            "agreement": 0.8, "signal": 0.6}])
+    check("P3 overall 记录可比较领域数", _ov.get("agreement_domains") == 1, _ov)
+    _v2 = []
+    fusion._folk_votes({"divination": {"systems": {"xiaoliuren": {"palace": "速喜"}}}}, _v2)
+    check("P4 小六壬只进时机、不进长线领域", not _v2, _v2)
+
     failed = [c for c in checks if not c[1]]
     print("跨体系融合层回归：%d 项" % len(checks))
     for name, ok, detail in checks:

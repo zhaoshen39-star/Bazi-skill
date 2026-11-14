@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """一键跑全部回归测试。
 
 用法：
@@ -13,6 +13,17 @@ import os
 import re
 import subprocess
 import sys
+
+# 控制台编码保护：输出被管道/重定向捕获时改用 UTF-8；
+# 人直接在 GBK 终端里跑时保留本地编码、不可编码字符替换为 ?，不再抛 UnicodeEncodeError。
+if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+    try:
+        if sys.stdout.isatty():
+            sys.stdout.reconfigure(errors="replace")
+        else:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -35,6 +46,7 @@ SUITES = [
     ("verify_numerology.py", "数字学层", []),
     ("verify_cases.py", "古典命例对照（测量口径）", ["--report-only"]),
     ("verify_qimen.py", "奇门遁甲层", []),
+    ("verify_fengshui.py", "风水适配/八宅/玄空飞星", []),
 ]
 
 _COUNT_PATTERNS = [
@@ -45,6 +57,10 @@ _COUNT_PATTERNS = [
     re.compile(r"可对照字段:\s*([0-9]+)"),
 ]
 _PASS_MARKS = ("全部通过", "全部一致", "ALL PASS", "结构通过")
+
+# 子进程统一用 UTF-8 输出：否则在 GBK 系统上子套件打印 ✓ / ─ 会抛 UnicodeEncodeError，
+# 看起来像「测试失败」，其实只是控制台编码问题。
+_SUBPROC_ENV = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
 
 
 def _count(out):
@@ -67,7 +83,8 @@ def main(argv):
             print("  --  %-26s 跳过（文件不存在）" % name)
             continue
         r = subprocess.run([sys.executable, path] + extra, capture_output=True,
-                           text=True, encoding="utf-8", timeout=600)
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=600, env=_SUBPROC_ENV)
         out = (r.stdout or "") + (r.stderr or "")
         n = _count(out)
         passed = r.returncode == 0 and any(m in out for m in _PASS_MARKS)

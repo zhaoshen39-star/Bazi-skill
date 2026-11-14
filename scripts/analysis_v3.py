@@ -20,7 +20,7 @@
 """
 
 from chart import (
-    GAN, ZHI, HIDE_GAN, HIDE_RATIO, ELEMENT_OF_GAN, ELEMENT_OF_ZHI, SHI_SHEN,
+    HIDE_GAN, HIDE_RATIO, ELEMENT_OF_GAN, ELEMENT_OF_ZHI,
 )
 from analysis import (
     ELEMENTS, SHENG, KE, ten_god_of, TEN_GOD_PARTY,
@@ -840,6 +840,7 @@ def pattern(pillars, day_gan, st=None):
         rank, hits = _god_rank(pillars, day_gan, gods)
         if rank >= min_rank:
             rescue.append({"for": bad_id, "desc": desc, "rank": rank,
+                           "gods": [g for g, _s in hits],
                            "members": _format_members(hits)})
     resolved = {r["for"] for r in rescue if r["rank"] >= 2}
     for b in bad:
@@ -1032,8 +1033,8 @@ def yong_shen(day_gan, profile=None, st=None, ge=None, pillars=None):
     elif special and special.get("kind") == "从弱":
         useful = [cai, guan, shi]
         avoid = [bi, yin]
-        primary = [max((cai, guan, shi), key=lambda e: shares[
-            {"财星": "财星", "官杀": "官杀", "食伤": "食伤"}[party_of_element(day_el, e)]])]
+        primary = [max((("财星", cai), ("官杀", guan), ("食伤", shi)),
+                       key=lambda p: shares.get(p[0], 0.0))[1]]
         secondary = [e for e in useful if e != primary[0]][:2]
         fuyi_desc = "从弱格：顺其弱势，喜财、官杀、食伤，忌印比帮身逆势。"
     elif label in ("身强", "偏强"):
@@ -1111,9 +1112,10 @@ def yong_shen(day_gan, profile=None, st=None, ge=None, pillars=None):
     rescue_elements = []
     if ge and ge.get("rescue"):
         for r in ge["rescue"]:
-            for m in r.get("members", []):
-                # members 形如 "正印(月柱)"，取十神名映射五行
-                god = m.split("(")[0]
+            gods = r.get("gods")
+            if gods is None:  # 兼容旧报告：从 "正印(月柱)" 这类文本回退解析
+                gods = [m.split("(")[0] for m in r.get("members", [])]
+            for god in gods:
                 if god in ("正印", "偏印"):
                     rescue_elements.append(yin)
                 elif god in ("正官", "七杀"):
@@ -1158,9 +1160,7 @@ def yong_shen(day_gan, profile=None, st=None, ge=None, pillars=None):
     primary_out = _dedupe(pri)[:2] or ([th["primary"]] if th["primary"] else [])
     secondary_out = _dedupe(sec)[:3]
     useful_out = _dedupe(primary_out + secondary_out + [e for e in (th["primary"], th["secondary"]) if e])
-    avoid_out = _dedupe(avoid)
-    if th["primary"] and th["primary"] in useful_out:
-        avoid_out = [e for e in avoid_out if e != th["primary"]]
+    avoid_out = [e for e in _dedupe(avoid) if e not in useful_out]
 
     # ── 用神有力 ────────────────────────────────────────────────────────
     ysf = []
@@ -1306,7 +1306,6 @@ def flow_favorability(ys, ganzhi):
             score += w * base
             reasons.append("地支%s藏%s=%s（%s，%+.2f）" % (
                 zhi, h, ELEMENT_OF_GAN[h], role, w * base))
-    w, role = _weight_of(ys, ELEMENT_OF_ZHI[zhi])
     score = max(-4.0, min(4.0, score))
     if score >= 1.6:
         label = "喜"
@@ -1371,9 +1370,14 @@ def _activation_delta(ys, element, base, sign_note):
 
 def _pair_events(gan, zhi, other_gz, ys, label, tense):
     """流年/大运 与某柱（或彼此）的互动条目。"""
-    gan_b, zhi_b = other_gz[0], other_gz[1]
+    try:
+        gan_b, zhi_b = other_gz[0], other_gz[1]
+    except (TypeError, IndexError, KeyError):
+        return []
+    if not isinstance(gan_b, str) or not isinstance(zhi_b, str):
+        return []
     out = []
-    same = (gan + zhi) == (gan_b + zhi_b)
+    same = (gan, zhi) == (gan_b, zhi_b)
     gk = _gan_kind(gan, gan_b)
     zk = _zhi_kind(zhi, zhi_b)
 
@@ -1423,10 +1427,16 @@ def _pair_events(gan, zhi, other_gz, ys, label, tense):
 
     # 天干
     if gk == "合":
-        delta, role, _ = _activation_delta(ys, _element_of_branch(zhi), 0.3, "")
+        he_el = None
+        for pair, el in GAN_HE.items():
+            if set(pair) == {gan, gan_b}:
+                he_el = el
+                break
+        delta, role, _ = _activation_delta(ys, he_el or _element_of_branch(zhi), 0.3, "")
         out.append({"type": "天干五合", "target": label, "delta": -abs(delta or 0.25),
                     "detail": "%s天干%s合%s天干%s：合绊，%s" % (
-                        tense, gan, label, gan_b, "化气另看"),
+                        tense, gan, label, gan_b,
+                        ("化%s" % he_el) if he_el else "化气另看"),
                     "role": role})
     elif gk == "冲":
         out.append({"type": "天干相冲", "target": label, "delta": -0.2,
@@ -1463,11 +1473,12 @@ def dayun_timing(dy, pillars, ys, ge=None, st=None):
     events = []
     for idx, p in enumerate(pillars):
         label = p.get("name") or PILLAR_NAMES[idx]
-        events.extend(_pair_events(ganzhi[0], ganzhi[1], (p["gan"], p["zhi"]),
-                                   ys, label, "大运"))
+        new_events = _pair_events(ganzhi[0], ganzhi[1], (p["gan"], p["zhi"]),
+                                  ys, label, "大运")
         if PALACE_DOMAIN.get(label):
-            for e in events[-3:]:
+            for e in new_events:
                 e.setdefault("palace", PALACE_DOMAIN[label])
+        events.extend(new_events)
 
     act = sum(e.get("delta", 0.0) for e in events)
     score = max(-4.0, min(4.0, base["score"] * 0.55 + act))

@@ -283,7 +283,8 @@ def _bazi_votes(report, votes):
         sig = SHENSHA_SIGNAL.get(name)
         if not dom or not sig:
             continue
-        _vote(votes, "bazi", dom, sig, "八字神煞：%s（%s）" % (name, "、".join(slots or [])[:24]))
+        _vote(votes, "bazi", dom, sig, "八字神煞：%s（%s）" % (
+            name, "、".join(str(x) for x in (slots or []))[:24]))
 
     # 专题层（若已计算）提供更直接的分域信号
     topics = _get(report, "topics", "topics")
@@ -417,7 +418,7 @@ def _ziwei_votes(report, votes):
         if used:
             sig = _clamp(sig * 0.6, -1.5, 1.5)
             _vote(votes, "ziwei", dom, sig,
-                  "紫微：%s宫 %s" % (base, "、".join(used[:4])))
+                  "紫微：%s宫 %s" % (base, "、".join(str(x) for x in used[:4])))
 
 
 # ---------------------------------------------------------------- 西洋/印度占星信号
@@ -539,8 +540,7 @@ def _western_votes(report, votes):
     asc = angles.get("asc")
     if isinstance(asc, dict):
         el = _sign_element(asc.get("sign_cn") or asc.get("sign"))
-        info = ELEMENT_DOMAIN.get(el or "")
-        if info:
+        if el in ELEMENT_DOMAIN:
             _vote(votes, "western", "personality", 0.5,
                   "西洋占星：上升%s（%s元素）" % (asc.get("sign_cn", ""), el))
 
@@ -679,16 +679,10 @@ def _folk_votes(report, votes):
     if not isinstance(systems, dict):
         return
 
-    lr = systems.get("xiaoliuren") or {}
-    if isinstance(lr, dict) and lr.get("available", True) is not False:
-        pal = lr.get("palace") or ""
-        sig = XIAOLIUREN_SIGNAL.get(pal)
-        if sig is not None:
-            _vote(votes, "folk", "move", sig * 0.8, "小六壬（当下问事）：%s" % pal)
-
     mh = systems.get("meihua") or {}
     if isinstance(mh, dict) and mh.get("available", True) is not False:
-        rel = _get(mh, "ti_yong", "relation", default="") or ""
+        rel = (_get(mh, "ti_yong", "text", default="")
+               or _get(mh, "ti_yong", "relation", default="") or "")
         for key, sig in TIYONG_SIGNAL:
             if key in rel:
                 _vote(votes, "folk", "career", sig * 0.7, "梅花易数：%s" % rel)
@@ -757,7 +751,7 @@ def _birth_year(report):
     if v:
         return v
     s = str(_get(report, "input", "date") or _get(report, "solar") or "")
-    for i in range(0, max(0, len(s) - 4)):
+    for i in range(0, max(1, len(s) - 3)):
         chunk = s[i:i + 4]
         if chunk.isdigit():
             y = int(chunk)
@@ -874,6 +868,8 @@ def _consensus(sys_sigs, total):
             same += w
         elif total < 0 and v < 0:
             same += w
+    if abs(total) < 1e-9:
+        return (None, None, "信号相抵")
     agreement = same / wsum if wsum else 0.0
     import math
     mean = sum(vals) / float(len(vals))
@@ -961,8 +957,10 @@ def _overall(domains):
         parts.append("偏吃力的领域：" + "、".join(neg))
     if not parts:
         parts.append("各领域接近中平")
-    summary = "；".join(parts) + "。跨体系平均一致度 %.2f。" % mean_agree
-    return {"agreement": round(mean_agree, 2), "confidence": conf, "summary": summary}
+    summary = ("；".join(parts)
+               + "。跨体系平均一致度 %.2f（%d 个领域可比较）。" % (mean_agree, len(agree)))
+    return {"agreement": round(mean_agree, 2), "confidence": conf,
+            "agreement_domains": len(agree), "summary": summary}
 
 
 def _tensions(domains):
@@ -1057,13 +1055,6 @@ def build_fusion(report):
 
 
 # ---------------------------------------------------------------- 渲染
-
-def _system_label(data, key):
-    for s in data.get("systems") or []:
-        if s.get("key") == key:
-            return s.get("name", key)
-    return key
-
 
 SYSTEM_SHORT = {
     "bazi": "八字", "ziwei": "紫微", "western": "西洋", "vedic": "印度",

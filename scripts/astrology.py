@@ -186,11 +186,7 @@ def julian_day(dt):
 def delta_t_seconds(year):
     """ΔT = TT − UT，单位秒。Espenak–Meeus 分段多项式（1800–2150 分段，其余外推）。"""
     y = float(year)
-    if y < 1800.0:
-        t = y - 1800.0
-        return (13.72 - 0.332447 * t + 0.0068612 * t ** 2 + 0.0041116 * t ** 3
-                - 0.00037436 * t ** 4 + 0.0000121272 * t ** 5
-                - 0.0000001699 * t ** 6 + 0.000000000875 * t ** 7)
+    # 1800 之前的年份沿用 1800–1860 段多项式（Espenak–Meeus 原文即如此，故不另设分支）
     if y < 1860.0:
         t = y - 1800.0
         return (13.72 - 0.332447 * t + 0.0068612 * t ** 2 + 0.0041116 * t ** 3
@@ -423,17 +419,25 @@ def planet_longitude(key, jd_tt_value):
     t = (jd_tt_value - 2451545.0) / 36525.0
     earth = _heliocentric_xyz("earth", t)
 
-    # 光行时迭代：行星在「光发出时刻」的位置
+    # 光行时迭代：行星在「光发出时刻」的位置（迭代到 tau 收敛，最多 8 次）
     tau = 0.0
     geo = earth
-    for _ in range(3):
+    for _ in range(8):
         tp = (jd_tt_value - tau - 2451545.0) / 36525.0
         planet = _heliocentric_xyz(key, tp)
         geo = (planet[0] - earth[0], planet[1] - earth[1], planet[2] - earth[2])
         dist = math.sqrt(geo[0] ** 2 + geo[1] ** 2 + geo[2] ** 2)
-        tau = _LIGHT_TIME_PER_AU * dist
+        if dist <= 1e-12:  # 退化：行星与地球方向重合，无法定向
+            break
+        new_tau = _LIGHT_TIME_PER_AU * dist
+        if abs(new_tau - tau) < 1e-9:
+            tau = new_tau
+            break
+        tau = new_tau
     gx, gy, gz = geo
     dist = math.sqrt(gx * gx + gy * gy + gz * gz)
+    if dist <= 1e-12:
+        raise ValueError("行星 %s 与地球重合，无法计算地心方向" % key)
     ux, uy, uz = gx / dist, gy / dist, gz / dist
 
     # 周年光行差：地球速度（AU/天）× 1/c，按矢量叠加到视方向
@@ -537,12 +541,16 @@ def whole_sign_cusps(asc_lon):
 
 
 def _semi_diurnal_arc(dec_deg, latitude_deg):
-    """天体周日半弧（度）；地平圈无交点（极昼/极夜）时返回 None。"""
+    """天体周日半弧（度）。
+
+    cos H = -tanφ·tanδ：|值|>1 说明地平圈无交点（极昼/极夜），
+    此时返回退化值——恒显 180°、恒隐 0°。
+    """
     x = -math.tan(latitude_deg * _DEG) * math.tan(dec_deg * _DEG)
     if x >= 1.0:
-        return 0.0      # 恒显：半弧取 0（退化）
+        return 0.0      # cos H > 1：天体永不升上地平（恒隐），半弧取 0
     if x <= -1.0:
-        return None     # 恒隐/无解：Placidus 退化
+        return 180.0    # cos H < -1：天体永不落下（恒显/极昼），半弧取 180
     return math.degrees(math.acos(x))
 
 
@@ -551,7 +559,10 @@ def placidus_cusps(ramc_deg, obliquity_deg, latitude_deg):
 
     11/12 宫头把「子午圈→上升点」的周日半弧三等分，2/3 宫头把
     「天底→上升点」的夜间半弧三等分；用不动点迭代求黄道交点。
-    极区（|纬度| ≳ 66.5°，半弧无解）返回 None。
+    Placidus 宫头定义在黄道上（β=0），迭代只求「该黄道点」的瞬时半弧分点，
+    因此不涉及星体黄纬改正，这是 Placidus 的标准定义而非近似。
+    极区（|纬度| ≳ 66.5°）或半弧饱和（恒显/恒隐）时无解，返回 None，
+    调用方回退整宫制。
     """
     lat = float(latitude_deg)
     if abs(lat) > 66.5:
@@ -570,8 +581,8 @@ def placidus_cusps(ramc_deg, obliquity_deg, latitude_deg):
         for _ in range(80):
             _, dec = _ecl_to_equatorial(lam, eps)
             ha = _semi_diurnal_arc(dec, lat)
-            if ha is None:
-                return None
+            if ha <= 0.0 or ha >= 180.0:
+                return None     # 半弧饱和：天体恒显/恒隐，Placidus 退化
             if kind == "d":
                 ra = ramc + ha * frac
             else:
@@ -604,7 +615,7 @@ def placidus_cusps(ramc_deg, obliquity_deg, latitude_deg):
 
 
 def house_of_longitude(lon_deg, cusps):
-    """按宫头列表（从第 1 宫起，12 个黄经）求某黄经落在第几宫。"""
+    """按宫头列表（从第 1 宫起，12 个黄经）求某黄经落在第几宫；无法判定时返回 None。"""
     lon = _norm360(lon_deg)
     for i in range(12):
         start = cusps[i]
@@ -614,7 +625,7 @@ def house_of_longitude(lon_deg, cusps):
         offset = _norm360(lon - start)
         if offset < span:
             return i + 1
-    return 1
+    return None
 
 
 def house_of_sign(sign_index, asc_sign_index):
@@ -828,12 +839,33 @@ def _resolve_moment(report):
     civil = _parse_datetime(time_info.get("civil"))
     if civil is None:
         date_text = input_info.get("date")
-        clock_text = input_info.get("time") or "12:00"
+        clock_raw = input_info.get("time")
+        clock_text = clock_raw if clock_raw not in (None, "") else "12:00"
         if date_text:
             civil = _parse_datetime("%s %s" % (date_text, clock_text))
-            if civil is not None and not input_info.get("time"):
+            if civil is not None and clock_raw in (None, ""):
                 civil = civil.replace(hour=12, minute=0, second=0)
     if civil is not None:
+        offset = time_info.get("utc_offset_hours")
+        assumed = False
+        if offset is None:
+            st_off = time_info.get("standard_offset_hours")
+            dst_off = time_info.get("dst_hours")
+            assumed = st_off is None and dst_off is None
+            offset = (st_off or 0.0) + (dst_off or 0.0)
+        try:
+            offset = float(offset)
+        except (TypeError, ValueError):
+            offset, assumed = 0.0, True
+        src = "report.time.civil-utc_offset"
+        if assumed:
+            src += "(offset 0 assumed)"
+        return civil - datetime.timedelta(hours=offset), src
+
+    # 3) 兜底：time.used 是「当地」时间（真太阳时/地方钟表），先减时区偏移换算成 UTC
+    used = _parse_datetime(time_info.get("used"))
+    if used is not None:
+        note = "true_solar" if time_info.get("used_kind") == "tst" else "local"
         offset = time_info.get("utc_offset_hours")
         if offset is None:
             offset = ((time_info.get("standard_offset_hours") or 0.0)
@@ -842,32 +874,33 @@ def _resolve_moment(report):
             offset = float(offset)
         except (TypeError, ValueError):
             offset = 0.0
-        return civil - datetime.timedelta(hours=offset), "report.time.civil-utc_offset"
-
-    # 3) 兜底：time.used（多为当地真太阳时，只能粗略当地方时用）
-    used = _parse_datetime(time_info.get("used"))
-    if used is not None:
-        note = "true_solar" if time_info.get("used_kind") == "tst" else "local"
-        return used, "report.time.used(%s)" % note
+        return (used - datetime.timedelta(hours=offset),
+                "report.time.used-as-local(%s)" % note)
 
     # 4) 完全没有时间信息：按 2000-01-01 12:00 UTC 兜底
     return datetime.datetime(2000, 1, 1, 12, 0, 0), "fallback(2000-01-01 12:00 UTC)"
 
 
 def _resolve_place(report):
-    """从 report 解析经度（东正）与纬度（北正），返回 (lon, lat, lat_default)。"""
+    """从 report 解析经度（东正）与纬度（北正），返回 (lon, lat, lat_default, notes)。"""
     report = report or {}
     time_info = report.get("time") or {}
     input_info = report.get("input") or {}
+    notes = []
 
     lon = input_info.get("longitude")
     if lon is None:
         lon = time_info.get("longitude")
-    try:
-        lon = float(lon) if lon is not None else 0.0
-    except (TypeError, ValueError):
+    if lon is None:
         lon = 0.0
+    else:
+        try:
+            lon = float(lon)
+        except (TypeError, ValueError):
+            notes.append("经度「%s」不是数值，已按 0° 计算四轴与宫位。" % (lon,))
+            lon = 0.0
     if lon < -180.0 or lon > 180.0:
+        notes.append("经度 %.2f° 超出 ±180°，已折返到等效经度。" % lon)
         lon = ((lon + 180.0) % 360.0) - 180.0
 
     lat = input_info.get("latitude")
@@ -879,13 +912,17 @@ def _resolve_place(report):
     if lat is None:
         lat = 30.0
         lat_default = True
-    try:
-        lat = float(lat)
-    except (TypeError, ValueError):
-        lat = 30.0
-        lat_default = True
-    lat = max(-89.9, min(89.9, lat))
-    return lon, lat, lat_default
+    else:
+        try:
+            lat = float(lat)
+        except (TypeError, ValueError):
+            notes.append("纬度「%s」不是数值，已按北纬 30° 计算（参考值）。" % (lat,))
+            lat = 30.0
+            lat_default = True
+    if lat > 89.9 or lat < -89.9:
+        notes.append("纬度 %.2f° 超出 ±89.9°，已截断（极区宫位仅作参考）。" % lat)
+        lat = max(-89.9, min(89.9, lat))
+    return lon, lat, lat_default, notes
 
 
 # ---------------------------------------------------------------------------
@@ -922,12 +959,12 @@ def chart_natal(report):
         moon_phase/vedic/summary/limits/warnings 等键，见模块 docstring。
     """
     dt_utc, time_source = _resolve_moment(report)
-    longitude, latitude, lat_default = _resolve_place(report)
+    longitude, latitude, lat_default, place_notes = _resolve_place(report)
     report = report or {}
     input_info = report.get("input") or {}
     time_info = report.get("time") or {}
 
-    warnings = []
+    warnings = list(place_notes)
     if lat_default:
         warnings.append("报告未提供纬度，按北纬 30° 默认计算四轴与宫位（参考值，精度有限）。")
     if time_source.startswith("fallback"):
@@ -1218,7 +1255,7 @@ def render_natal_text(chart):
     for p in chart.get("planets") or []:
         names[p["key"]] = p["name"]
     for a in chart.get("angles") or {}:
-        names[a] = chart["angles"][a]["en"]
+        names[a] = (chart["angles"][a] or {}).get("en") or a
     if aspects:
         for asp in aspects:
             lines.append("  %s %s %s（%.1f°，容许度 %.2f°）"

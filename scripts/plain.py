@@ -137,6 +137,35 @@ EVENT_PLAIN = {
     "半合局": "事情有合作或撮合的机会",
 }
 
+#: 事件类型别名——analysis_v3 里真实产生的类型与上表键不完全一致，统一在这里归一，
+#: 避免「65 个事件只翻译出 42 个」这种静默丢句。
+EVENT_ALIASES = {
+    "地支六冲": "地支冲",
+    "地支相刑": "地支刑",
+    "反吟（天克地冲）": "反吟",
+    "地支半合局": "半合局",
+}
+
+
+def _event_plain(typ):
+    """把任意事件类型翻译成人话；认不出返回 None（调用方跳过）。"""
+    t = str(typ or "").strip()
+    if not t:
+        return None
+    if t in EVENT_PLAIN:
+        return EVENT_PLAIN[t]
+    if t in EVENT_ALIASES:
+        return EVENT_PLAIN[EVENT_ALIASES[t]]
+    if t.startswith("地支半合"):
+        return EVENT_PLAIN["半合局"]
+    if t.startswith("反吟"):
+        return EVENT_PLAIN["反吟"]
+    if t.startswith("地支六冲"):
+        return EVENT_PLAIN["地支冲"]
+    if t.startswith("地支相刑"):
+        return EVENT_PLAIN["地支刑"]
+    return None
+
 LIMITS = [
     "同样的八字，成长环境、选择和努力不同，结果会差很多——这里是倾向，不是命定。",
     "出生时间如果不准，晚年、子女这类结论会跟着变。",
@@ -155,10 +184,6 @@ GLOSSARY = [
 ]
 
 
-def _fmt_pct(v):
-    return "%.0f%%" % (v * 100.0)
-
-
 def _party_share(st, name):
     return float((st.get("party_shares") or {}).get(name, 0.0))
 
@@ -172,36 +197,73 @@ def _top_parties(st, n=2, floor=0.12):
 
 def _tou_gans(report):
     out = []
-    for p in report["chart"]["pillars"]:
+    for p in ((report.get("chart") or {}).get("pillars") or []):
         g = p.get("shishen_gan")
         if g and g not in out:
             out.append(g)
     return out
 
 
+def _sex_male(report):
+    """性别归一：男 True / 女 False / 未知 None（兼容 1|0、male|female、男|女）。"""
+    raw = (report.get("input") or {}).get("sex")
+    if raw is None:
+        raw = ((report.get("chart") or {}).get("input") or {}).get("sex")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int):
+        return raw == 1
+    s = str(raw or "").strip().lower()
+    if s in ("male", "m", "男", "1"):
+        return True
+    if s in ("female", "f", "女", "0"):
+        return False
+    return None
+
+
+def _day_pillar(chart):
+    pillars = (chart or {}).get("pillars") or []
+    for p in pillars:
+        if isinstance(p, dict) and p.get("name") == "日柱":
+            return p
+    return pillars[2] if len(pillars) > 2 and isinstance(pillars[2], dict) else {}
+
+
 def _dayun_current(report):
-    year = int(report.get("focus_year") or 0)
-    for dy in (report["chart"].get("dayun") or {}).get("list") or []:
-        if dy["start_year"] <= year <= dy["end_year"]:
+    year = int(report.get("focus_year") or 2026)  # 与 forecast 段的兜底口径保持一致
+    for dy in ((report.get("chart") or {}).get("dayun") or {}).get("list") or []:
+        sy, ey = dy.get("start_year"), dy.get("end_year")
+        if sy is None or ey is None:
+            continue
+        if sy <= year <= ey:
             return dy
     return None
 
 
 def _element_power(report):
-    force = (report["analysis"]["strength"].get("force") or {})
-    if not force:
-        totals = report["analysis"]["wuxing"].get("totals") or {}
+    """健康段用传统五行力量（totals）优先；缺 wuxing 时退回结构力。"""
+    analysis = report.get("analysis") or {}
+    totals = (analysis.get("wuxing") or {}).get("totals") or {}
+    if totals:
         return dict(totals)
-    return force
+    return dict((analysis.get("strength") or {}).get("force") or {})
 
 
 def build_plain(report):
+    """把完整报告翻译成通俗版；报告缺段时给出可读错误，而不是裸 KeyError。"""
+    for key in ("analysis", "chart"):
+        if not isinstance(report.get(key), dict):
+            raise SystemExit("通俗版需要完整报告（缺少 %s 段）——请用 bazi.build_report() 的输出。" % key)
     a = report["analysis"]
+    for key in ("strength", "pattern", "yong_shen"):
+        if not isinstance(a.get(key), dict):
+            raise SystemExit("通俗版需要完整报告（缺少 analysis.%s 段）。" % key)
     st = a["strength"]
     ge = a["pattern"]
     ys = a["yong_shen"]
     chart = report["chart"]
-    day_gan = chart["day_gan"]
+    tou = _tou_gans(report)
+    day_gan = chart.get("day_gan") or ""
     day_el = chart.get("day_gan_wuxing") or ""
     label = st.get("label") or "中和"
     roles = ys.get("shen_roles") or {}
@@ -220,7 +282,7 @@ def build_plain(report):
         if party in PARTY_TRAIT:
             profile.append("你" + PARTY_TRAIT[party] + "。")
     shown = 0
-    for g in _tou_gans(report):
+    for g in tou:
         if g in GOD_TRAIT and shown < 3:
             profile.append("你%s。" % GOD_TRAIT[g])
             shown += 1
@@ -241,7 +303,7 @@ def build_plain(report):
         )
     if _party_share(st, "印星") >= 0.22:
         strengths.append("学东西、考证、跟对平台，是你最快的加分方式。")
-    if any(g in ("食神", "伤官") for g in _tou_gans(report)):
+    if any(g in ("食神", "伤官") for g in tou):
         strengths.append("把你的想法讲清楚、做出来给人看，别人会买账。")
     if ge.get("shun_ni", "").startswith("顺用"):
         strengths.append("走常规路线、一步一步积累，比投机更合你的性子。")
@@ -285,15 +347,17 @@ def build_plain(report):
 
     # ---- 感情 ----
     relationship = []
-    sex = (report["input"].get("sex") or "").lower()
-    spouse_god = (chart["pillars"][2].get("canggan_shishen") or [""])[0]
-    if sex in ("male", "男", "m"):
+    male = _sex_male(report)
+    spouse_god = (_day_pillar(chart).get("canggan_shishen") or [""])[0]
+    if male is True:
         if cai >= 0.30:
             relationship.append("感情里你容易先算现实条件，这不算错，但别让对方觉得只在算账。")
         else:
             relationship.append("感情上你不主动争，遇到合适的要更明确一点。")
-    else:
+    elif male is False:
         relationship.append("感情里你容易先照顾对方的感受，记得也要说出自己的需要。")
+    else:
+        relationship.append("感情这块先看清对方是什么样的人，再决定投入多少。")
     if spouse_god:
         relationship.append("你更容易被「%s」吸引。" % SPOUSE_TYPE.get(spouse_god, "相处起来舒服的人"))
     if label in ("身弱", "偏弱") and cai >= 0.30:
@@ -302,9 +366,12 @@ def build_plain(report):
     # ---- 身体 ----
     health = []
     power = _element_power(report)
-    if power:
-        hi = max(power, key=lambda k: power[k])
-        lo = min(power, key=lambda k: power[k])
+    _ELEMENTS = ("木", "火", "土", "金", "水")
+    _vals = [float(power.get(el, 0.0)) for el in _ELEMENTS]
+    if power and max(_vals) > 0 and max(_vals) != min(_vals):
+        # 并列时按五行固定顺序取（避免 dict 顺序不同导致输出漂移）
+        hi = max(_ELEMENTS, key=lambda el: (float(power.get(el, 0.0)), -_ELEMENTS.index(el)))
+        lo = min(_ELEMENTS, key=lambda el: (float(power.get(el, 0.0)), _ELEMENTS.index(el)))
         hi_note = {
             "火": "心火、睡眠、血压容易敏感，夏天尤其",
             "土": "肠胃和消化要顾",
@@ -327,18 +394,23 @@ def build_plain(report):
     dy = _dayun_current(report)
     current_decade = ""
     if dy:
-        t = dy.get("timing") or {}
-        lvl = LEVEL_PLAIN.get(t.get("label") or (dy.get("favorability") or {}).get("label", "中性"), "平稳")
-        gods = t.get("gods") or []
-        topics = "、".join(GOD_TOPIC.get(g, g) for g in gods[:2]) or "日常"
-        current_decade = "%d–%d 年这十年（%s）：整体%s，主题偏「%s」。" % (
-            dy["start_year"], dy["end_year"], dy["ganzhi"], lvl, topics)
+        sy, ey = dy.get("start_year"), dy.get("end_year")
+        if sy is not None and ey is not None:
+            t = dy.get("timing") or {}
+            lvl = LEVEL_PLAIN.get(t.get("label") or (dy.get("favorability") or {}).get("label", "中性"), "平稳")
+            gods = t.get("gods") or []
+            topics = "、".join(GOD_TOPIC.get(g, g) for g in gods[:2]) or "日常"
+            current_decade = "%d–%d 年这十年（%s）：整体%s，主题偏「%s」。" % (
+                int(sy), int(ey), dy.get("ganzhi") or "", lvl, topics)
 
     # ---- 近几年预测 ----
     fy = int(report.get("focus_year") or 2026)
     forecast = []
     for ly in chart.get("liunian") or []:
-        y = int(ly["year"])
+        raw_year = ly.get("year")
+        if raw_year is None:
+            continue
+        y = int(raw_year)
         if y < fy or y > fy + 3:
             continue
         t = ly.get("timing") or {}
@@ -349,7 +421,7 @@ def build_plain(report):
         topics = "、".join(GOD_TOPIC.get(g, g) for g in gods[:2])
         events = []
         for e in (t.get("events") or []):
-            plain = EVENT_PLAIN.get(e.get("type", ""))
+            plain = _event_plain(e.get("type", ""))
             if plain and plain not in events:
                 events.append(plain)
         what = "主题是%s" % topics if topics else "没有特别集中的主题"
@@ -395,7 +467,11 @@ def build_plain(report):
         pace,
     )
     if len(one_line) > 80:
-        one_line = one_line[:79] + "。"
+        # 先退到 80 字内最后一个完整分句，避免在词中间硬切
+        cut = max(one_line.rfind(sep, 0, 80) for sep in ("，", "；", "、", " "))
+        if cut < 40:
+            cut = 79
+        one_line = one_line[:max(1, cut)].rstrip("，；、 ") + "。"
 
     return {
         "version": 1,
@@ -418,9 +494,9 @@ def build_plain(report):
 def render_plain_text(plain, report=None):
     lines = []
     if report is not None:
-        c = report["chart"]
-        pillars = " ".join(p["ganzhi"] for p in c["pillars"])
-        lines.append("【排盘】%s（日主：%s%s）" % (pillars, c["day_gan"], c.get("day_gan_wuxing", "")))
+        c = report.get("chart") or {}
+        pillars = " ".join(str(p.get("ganzhi") or "") for p in (c.get("pillars") or []))
+        lines.append("【排盘】%s（日主：%s%s）" % (pillars, c.get("day_gan") or "", c.get("day_gan_wuxing") or ""))
         t = report.get("time") or {}
         if t.get("used_label"):
             lines.append("【时间口径】%s（%s）" % (t["used_label"], t.get("used", "")))
@@ -454,9 +530,10 @@ def render_plain_text(plain, report=None):
         lines.append("【接下来几年怎么走】")
         for f in plain["forecast"]:
             lines.append("· %d 年（%s）：整体%s（%s）。%s" % (
-                f["year"], f["ganzhi"], f["level"], f["confidence"], f["what"]))
-            lines.append("  怎么用：%s" % f["do"])
-            lines.append("  避开：%s" % f["avoid"])
+                int(f.get("year") or 0), f.get("ganzhi") or "", f.get("level") or "",
+                f.get("confidence") or "", f.get("what") or ""))
+            lines.append("  怎么用：%s" % (f.get("do") or ""))
+            lines.append("  避开：%s" % (f.get("avoid") or ""))
         lines.append("")
 
     if plain.get("actions"):
@@ -503,7 +580,8 @@ def render_brief_text(plain, limit=BRIEF_LIMIT):
         cand.append("【钱与工作】" + mw[0])
     for f in (plain.get("forecast") or [])[:2]:
         cand.append("【%s年】整体%s；怎么用：%s；避开：%s" % (
-            f.get("year"), f.get("level"), f.get("do"), f.get("avoid")))
+            f.get("year") or "", f.get("level") or "",
+            f.get("do") or "", f.get("avoid") or ""))
     for a in (plain.get("actions") or [])[:2]:
         cand.append("【建议】" + a)
 
